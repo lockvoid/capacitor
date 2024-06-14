@@ -358,6 +358,7 @@ import Cordova
         if let webView = webView {
             view.insertSubview(webView, belowSubview: screenshotImageView)
             webView.translatesAutoresizingMaskIntoConstraints = false
+            screenshotImageView.isHidden = true
             NSLayoutConstraint.activate([
                 webView.topAnchor.constraint(equalTo: view.topAnchor),
                 webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),

@@ -3,6 +3,7 @@ import WebKit
 import Cordova
 
 @objc open class CAPBridgeViewController: UIViewController {
+    
     private var capacitorBridge: CapacitorBridge?
     public final var bridge: CAPBridgeProtocol? {
         return capacitorBridge
@@ -14,6 +15,13 @@ import Cordova
     public var statusBarStyle: UIStatusBarStyle = .default
     public var statusBarAnimation: UIStatusBarAnimation = .fade
     @objc public var supportedOrientations: [Int] = []
+    
+    private var screenshotImageView = UIImageView()
+    
+    public var viewWillAppearHandler: (() -> Void)?
+    public var viewDidAppearHandler: (() -> Void)?
+    public var viewWillDisappearHandler: (() -> Void)?
+    public var viewDidDisappearHandler: (() -> Void)?
 
     public lazy final var isNewBinary: Bool = {
         if let curVersionCode = Bundle.main.infoDictionary?["CFBundleVersion"] as? String,
@@ -26,41 +34,117 @@ import Cordova
         }
         return false
     }()
-
+    
+    public init() {
+        super.init(nibName: nil, bundle: nil)
+    }
+    
+    public init(webview: WKWebView?, capacitorBridge: CAPBridgeProtocol?) {
+        self.webView = webview
+        if let capacitorBridge = capacitorBridge as? CapacitorBridge {
+            self.capacitorBridge = capacitorBridge
+        }
+        super.init(nibName: nil, bundle: nil)
+    }
+    
+    required public init?(coder: NSCoder) {
+        super.init(nibName: nil, bundle: nil)
+    }
+    
     override public final func loadView() {
         // load the configuration and set the logging flag
-        let configDescriptor = instanceDescriptor()
-        let configuration = InstanceConfiguration(with: configDescriptor, isDebug: CapacitorBridge.isDevEnvironment)
-        CAPLog.enableLogging = configuration.loggingEnabled
-        logWarnings(for: configDescriptor)
+        if let webView = webView {
+            capacitorBridge?.bridgeDelegate = self
+            view = UIView()
+            view.backgroundColor = .white
+            view.addSubview(webView)
+            webView.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                webView.topAnchor.constraint(equalTo: view.topAnchor),
+                webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+                webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                webView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+            ])
+            capacitorBridge?.webViewDelegationHandler.delegate = self
+        } else {
+            let configDescriptor = instanceDescriptor()
+            let configuration = InstanceConfiguration(with: configDescriptor, isDebug: CapacitorBridge.isDevEnvironment)
+            CAPLog.enableLogging = configuration.loggingEnabled
+            logWarnings(for: configDescriptor)
 
-        if configDescriptor.instanceType == .fixed {
-            updateBinaryVersion()
+            if configDescriptor.instanceType == .fixed {
+                updateBinaryVersion()
+            }
+
+            setStatusBarDefaults()
+            setScreenOrientationDefaults()
+
+            // get the web view
+            let assetHandler = WebViewAssetHandler(router: router())
+            assetHandler.setAssetPath(configuration.appLocation.path)
+            assetHandler.setServerUrl(configuration.serverURL)
+            let delegationHandler = WebViewDelegationHandler()
+            prepareWebView(with: configuration, assetHandler: assetHandler, delegationHandler: delegationHandler)
+            view = UIView()
+            view.backgroundColor = .white
+            
+            if let webView = webView {
+                view.addSubview(webView)
+                webView.translatesAutoresizingMaskIntoConstraints = false
+                NSLayoutConstraint.activate([
+                    webView.topAnchor.constraint(equalTo: view.topAnchor),
+                    webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+                    webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                    webView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+                ])
+            }
+            
+            
+            // create the bridge
+            capacitorBridge = CapacitorBridge(with: configuration,
+                                              delegate: self,
+                                              cordovaConfiguration: configDescriptor.cordovaConfiguration,
+                                              assetHandler: assetHandler,
+                                              delegationHandler: delegationHandler)
+            capacitorBridge?.webViewDelegationHandler.delegate = self
+            capacitorDidLoad()
         }
-
-        setStatusBarDefaults()
-        setScreenOrientationDefaults()
-
-        // get the web view
-        let assetHandler = WebViewAssetHandler(router: router())
-        assetHandler.setAssetPath(configuration.appLocation.path)
-        assetHandler.setServerUrl(configuration.serverURL)
-        let delegationHandler = WebViewDelegationHandler()
-        prepareWebView(with: configuration, assetHandler: assetHandler, delegationHandler: delegationHandler)
-        view = webView
-        // create the bridge
-        capacitorBridge = CapacitorBridge(with: configuration,
-                                          delegate: self,
-                                          cordovaConfiguration: configDescriptor.cordovaConfiguration,
-                                          assetHandler: assetHandler,
-                                          delegationHandler: delegationHandler)
-        capacitorDidLoad()
+        
+        view.addSubview(screenshotImageView)
+        screenshotImageView.isHidden = true
+        screenshotImageView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            screenshotImageView.topAnchor.constraint(equalTo: view.topAnchor),
+            screenshotImageView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            screenshotImageView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            screenshotImageView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+        ])
     }
 
     override open func viewDidLoad() {
         super.viewDidLoad()
         self.becomeFirstResponder()
         loadWebView()
+    }
+    
+    open override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        viewWillAppearHandler?()
+    }
+    
+    open override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        viewDidAppearHandler?()
+    }
+    
+    open override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        viewWillDisappearHandler?()
+    }
+    
+    open override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        viewDidDisappearHandler?()
     }
 
     override open func canPerformUnwindSegueAction(_ action: Selector, from fromViewController: UIViewController, withSender sender: Any) -> Bool {
@@ -163,7 +247,7 @@ import Cordova
         let url = bridge.config.appStartServerURL
         CAPLog.print("⚡️  Loading app at \(url.absoluteString)...")
         bridge.webViewDelegationHandler.willLoadWebview(webView)
-        _ = webView?.load(URLRequest(url: url))
+//        _ = webView?.load(URLRequest(url: url))
     }
 
     // MARK: - System Integration
@@ -254,6 +338,33 @@ import Cordova
             ret = ret | (1 << UIInterfaceOrientation.landscapeLeft.rawValue)
         }
         return UIInterfaceOrientationMask.init(rawValue: UInt(ret))
+    }
+    
+    public func showScreenshot() {
+        if let image = view.takeScreenshot() {
+            screenshotImageView.image = image
+            screenshotImageView.isHidden = false
+        }
+    }
+    
+    public func getBackWebView(webView: WKWebView?, capacitorBridge: CAPBridgeProtocol?) {
+        self.webView = webView
+        if let capacitorBridge = capacitorBridge as? CapacitorBridge {
+            self.capacitorBridge = capacitorBridge
+            capacitorBridge.bridgeDelegate = self
+            capacitorBridge.webViewDelegationHandler.delegate = self
+        }
+        
+        if let webView = webView {
+            view.insertSubview(webView, belowSubview: screenshotImageView)
+            webView.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                webView.topAnchor.constraint(equalTo: view.topAnchor),
+                webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+                webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                webView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+            ])
+        }
     }
 }
 
@@ -365,5 +476,29 @@ extension CAPBridgeViewController: CAPBridgeDelegate {
 
     internal var bridgedViewController: UIViewController? {
         return self
+    }
+}
+
+extension CAPBridgeViewController: WebViewDelegationHandlerDelegate {
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        screenshotImageView.isHidden = true
+    }
+    
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        screenshotImageView.isHidden = true
+    }
+}
+
+extension UIView {
+    func takeScreenshot() -> UIImage? {
+        UIGraphicsBeginImageContextWithOptions(self.bounds.size, false, UIScreen.main.scale)
+        guard let context = UIGraphicsGetCurrentContext() else {
+            UIGraphicsEndImageContext()
+            return nil
+        }
+        self.layer.render(in: context)
+        let screenshotImage = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
+        return screenshotImage
     }
 }

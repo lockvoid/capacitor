@@ -1,11 +1,17 @@
 import Foundation
 import WebKit
 
+protocol WebViewDelegationHandlerDelegate: AnyObject {
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!)
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error)
+}
+
 // adopting a public protocol in an internal class is by design
 // swiftlint:disable lower_acl_than_parent
 @objc(CAPWebViewDelegationHandler)
 internal class WebViewDelegationHandler: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
     weak var bridge: CapacitorBridge?
+    weak var delegate: WebViewDelegationHandlerDelegate?
     fileprivate(set) var contentController = WKUserContentController()
     enum WebViewLoadingState {
         case unloaded
@@ -127,6 +133,7 @@ internal class WebViewDelegationHandler: NSObject, WKNavigationDelegate, WKUIDel
             webView.isOpaque = isOpaque
             webViewLoadingState = .subsequentLoad
         }
+        delegate?.webView(webView, didFinish: navigation)
         CAPLog.print("⚡️  WebView loaded")
     }
 
@@ -141,7 +148,7 @@ internal class WebViewDelegationHandler: NSObject, WKNavigationDelegate, WKUIDel
         if let errorURL = bridge?.config.errorPathURL {
             webView.load(URLRequest(url: errorURL))
         }
-
+        delegate?.webView(webView, didFail: navigation, withError: error)
         CAPLog.print("⚡️  WebView failed to load")
         CAPLog.print("⚡️  Error: " + error.localizedDescription)
     }
